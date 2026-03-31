@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import {
   Activity,
   AlertTriangle,
@@ -40,41 +40,7 @@ const riskTrend = [
   { time: '18:00', probability: 63 },
 ]
 
-const initialAlerts = [
-  {
-    id: 'AL-204',
-    zone: 'Sector North / Drain 14',
-    issue: 'Plastic buildup detected by camera analytics',
-    coordinates: '25.2854, 51.5310',
-    severity: 'High',
-    eta: '8 min',
-    status: 'Pending',
-  },
-  {
-    id: 'AL-198',
-    zone: 'Central Market Culvert',
-    issue: 'Water level trend exceeds safe threshold',
-    coordinates: '25.2811, 51.5268',
-    severity: 'Medium',
-    eta: '12 min',
-    status: 'Queued',
-  },
-  {
-    id: 'AL-176',
-    zone: 'Transit Hub Outlet',
-    issue: 'Sediment accumulation flagged for manual cleaning',
-    coordinates: '25.2769, 51.5346',
-    severity: 'High',
-    eta: '6 min',
-    status: 'Pending',
-  },
-]
-
-const initialValves = [
-  { id: 'V-12', location: 'Tunnel West', state: 'Open', flow: '62%' },
-  { id: 'V-08', location: 'North Junction', state: 'Closed', flow: '14%' },
-  { id: 'V-21', location: 'Central Basin', state: 'Open', flow: '74%' },
-]
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL?.trim() || 'http://127.0.0.1:8000'
 
 const twinNodePositions = [
   'top-[18%] left-[16%]',
@@ -104,18 +70,30 @@ function StatusCard({ icon, label, value, helper, tone = 'cyan' }) {
 }
 
 function App() {
-  const [alerts, setAlerts] = useState(initialAlerts)
-  const [valves, setValves] = useState(initialValves)
-  const { telemetry, zoneDepths, connection } = useSensorData()
+  const [alertOverrides, setAlertOverrides] = useState({})
+  const [valveOverrides, setValveOverrides] = useState({})
+  const { telemetry, zoneDepths, connection, alerts: dbAlerts, valves: dbValves } = useSensorData()
+
+  const alerts = useMemo(
+    () => dbAlerts.map((alert) => ({ ...alert, ...(alertOverrides[alert.id] ?? {}) })),
+    [dbAlerts, alertOverrides],
+  )
+  const valves = useMemo(
+    () => dbValves.map((valve) => ({ ...valve, ...(valveOverrides[valve.id] ?? {}) })),
+    [dbValves, valveOverrides],
+  )
 
   const activeAlerts =
-    alerts.filter((alert) => alert.status !== 'Dispatched').length + Number(telemetry.blockageDetected)
+    alerts.filter((alert) => !['Dispatched', 'Resolved'].includes(alert.status)).length +
+    Number(telemetry.blockageDetected)
   const openValves = valves.filter((valve) => valve.state === 'Open').length
   const riskBand =
     telemetry.floodRisk >= 70 ? 'Critical' : telemetry.floodRisk >= 45 ? 'Elevated' : 'Stable'
-  const blockageMessage = telemetry.blockageDetected
-    ? `Edge AI flagged obstruction near ${telemetry.blockedSegment}`
-    : 'Edge AI reports clear flow through the monitored pipe segments'
+  const blockageMessage = !telemetry.sensors.length
+    ? 'Waiting for live ESP32 telemetry from aquasensor/data'
+    : telemetry.blockageDetected
+      ? `Edge AI flagged obstruction near ${telemetry.blockedSegment}`
+      : 'Live telemetry reports clear flow through the monitored pipe segments'
   const liveRiskTrend = riskTrend.map((point, index) =>
     index === riskTrend.length - 1 ? { ...point, probability: telemetry.floodRisk } : point,
   )
@@ -124,27 +102,66 @@ function App() {
     status: `${sensor.waterLevel}% • ${sensor.blockageDetected ? 'AI alert' : 'Normal flow'}`,
     position: twinNodePositions[index % twinNodePositions.length],
   }))
+  const liveWaterNodes = telemetry.sensors.length
+    ? telemetry.sensors
+    : [
+        {
+          id: 'NETWORK',
+          name: 'Network Average',
+          zone: 'All Zones',
+          waterLevel: telemetry.waterLevel,
+          waterLevelCm: Number(((telemetry.waterLevelMm ?? 0) / 10).toFixed(1)),
+          blockageDetected: telemetry.blockageDetected,
+        },
+      ]
+  const waterDepthChartData = zoneDepths.length
+    ? zoneDepths
+    : [{ zone: 'Network', depth: Number((((telemetry.waterLevelMm ?? 0) / 10 / 40)).toFixed(1)) }]
+  const priorityWaterNode = [...liveWaterNodes].sort(
+    (left, right) => (right.waterLevel ?? 0) - (left.waterLevel ?? 0),
+  )[0]
 
   const handleDispatch = (id) => {
-    setAlerts((current) =>
-      current.map((alert) =>
-        alert.id === id ? { ...alert, status: 'Dispatched', eta: 'Team en route' } : alert,
-      ),
-    )
+    setAlertOverrides((current) => ({
+      ...current,
+      [id]: { status: 'Dispatched', eta: 'Team en route' },
+    }))
   }
 
-  const toggleValve = (id) => {
-    setValves((current) =>
-      current.map((valve) =>
-        valve.id === id
-          ? {
-              ...valve,
-              state: valve.state === 'Open' ? 'Closed' : 'Open',
-              flow: valve.state === 'Open' ? '12%' : '71%',
-            }
-          : valve,
-      ),
-    )
+  const toggleValve = async (id) => {
+    const currentValve = valves.find((valve) => valve.id === id)
+    if (!currentValve) {
+      return
+    }
+
+    const nextState = currentValve.state === 'Open' ? 'Closed' : 'Open'
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/v1/valve-command`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          node_id: currentValve.nodeId,
+          open: nextState === 'Open',
+        }),
+      })
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`)
+      }
+
+      setValveOverrides((current) => ({
+        ...current,
+        [id]: {
+          state: nextState,
+          flow: nextState === 'Open' ? '90%' : '0%',
+        },
+      }))
+    } catch (error) {
+      console.warn('Valve command publish failed.', error)
+    }
   }
 
   return (
@@ -168,12 +185,16 @@ function App() {
 
             <div className="flex flex-wrap gap-2 text-xs">
               <span className="rounded-full border border-emerald-500/30 bg-emerald-500/10 px-3 py-1 font-medium text-emerald-300">
-                {connection.mode === 'websocket'
-                  ? `WebSocket ${connection.status === 'live' ? 'Live' : 'Connecting'}`
-                  : 'Simulation Fallback'}
+                {connection.mode === 'supabase'
+                  ? `Supabase ${connection.status === 'live' ? 'Live' : 'Syncing'}`
+                  : `WebSocket ${connection.status === 'live' ? 'Live' : connection.status === 'reconnecting' ? 'Reconnecting' : 'Waiting'}`}
               </span>
               <span className="rounded-full border border-cyan-500/30 bg-cyan-500/10 px-3 py-1 font-medium text-cyan-200">
-                {telemetry.transport?.mqttConnected ? 'MQTT TLS Bridge Active' : 'FastAPI Demo Stream'}
+                {connection.mode === 'supabase'
+                  ? 'Supabase Postgres Live'
+                  : telemetry.transport?.mqttConnected
+                    ? 'MQTT Bridge Active'
+                    : 'Awaiting MQTT telemetry'}
               </span>
               <span className="rounded-full border border-violet-500/30 bg-violet-500/10 px-3 py-1 font-medium text-violet-200">
                 Last Sync {telemetry.updatedAt.toLocaleTimeString()}
@@ -187,7 +208,7 @@ function App() {
             icon={<ShieldCheck className="h-5 w-5 text-white" />}
             label="System Health"
             value={`${telemetry.health}%`}
-            helper="Sensor fabric stable across the camera, pipe, and level telemetry streams"
+            helper="Sensor fabric stable across the pipe, valve, and water-level telemetry streams"
             tone="emerald"
           />
           <StatusCard
@@ -308,7 +329,7 @@ function App() {
               </div>
 
               <div className="h-56">
-                <ResponsiveContainer width="100%" height="100%">
+                <ResponsiveContainer width="100%" height="100%" minWidth={200} minHeight={200}>
                   <AreaChart data={liveRiskTrend}>
                     <defs>
                       <linearGradient id="riskFill" x1="0" y1="0" x2="0" y2="1">
@@ -361,8 +382,8 @@ function App() {
               </div>
 
               <div className="h-48">
-                <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={zoneDepths}>
+                <ResponsiveContainer width="100%" height="100%" minWidth={200} minHeight={150}>
+                  <BarChart data={waterDepthChartData}>
                     <CartesianGrid stroke="#1e293b" strokeDasharray="3 3" vertical={false} />
                     <XAxis dataKey="zone" stroke="#94a3b8" fontSize={12} />
                     <YAxis stroke="#94a3b8" fontSize={12} />
@@ -381,108 +402,200 @@ function App() {
           </aside>
         </section>
 
-        <section className="grid gap-4 xl:grid-cols-[1.25fr_0.95fr]">
-          <section className="rounded-2xl border border-amber-500/20 bg-slate-900/70 p-4 backdrop-blur">
-            <div className="mb-4 flex items-center justify-between">
+        <section className="grid gap-4 xl:grid-cols-[1.5fr_1fr]">
+          <div className="rounded-2xl border border-cyan-500/20 bg-slate-900/70 p-4 backdrop-blur">
+            <div className="mb-4 flex items-center justify-between gap-3">
               <div>
-                <p className="text-[11px] uppercase tracking-[0.32em] text-amber-300">
-                  Field Team Dispatch & Manual Cleaning Alerts
+                <p className="text-[11px] uppercase tracking-[0.32em] text-cyan-300">
+                  Live Water Level
                 </p>
-                <h2 className="mt-1 text-lg font-semibold text-white">Manual cleaning queue</h2>
+                <h2 className="mt-1 text-lg font-semibold text-white">Real-time water monitoring</h2>
               </div>
-              <MapPinned className="h-5 w-5 text-amber-300" />
+              <Droplets className="h-5 w-5 text-cyan-300" />
             </div>
 
-            <div className="space-y-3">
-              {alerts.map((alert) => (
-                <article key={alert.id} className="rounded-xl border border-slate-800 bg-slate-950/80 p-4">
-                  <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-                    <div>
-                      <div className="flex flex-wrap items-center gap-2">
-                        <p className="font-medium text-white">{alert.zone}</p>
-                        <span className="rounded-full border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 text-[11px] text-amber-200">
-                          {alert.severity}
-                        </span>
-                        <span className="rounded-full border border-slate-700 px-2 py-0.5 text-[11px] text-slate-300">
-                          {alert.id}
-                        </span>
-                      </div>
-                      <p className="mt-2 text-sm text-slate-300">{alert.issue}</p>
-                      <div className="mt-2 flex flex-wrap gap-4 text-xs text-slate-400">
-                        <span>GPS: {alert.coordinates}</span>
-                        <span>ETA: {alert.eta}</span>
-                        <span>Status: {alert.status}</span>
-                      </div>
-                    </div>
+            <div className="mb-4 grid gap-3 sm:grid-cols-3">
+              <div className="rounded-xl border border-cyan-500/20 bg-cyan-500/10 p-3">
+                <p className="text-xs uppercase tracking-[0.24em] text-cyan-200">Peak Level</p>
+                <p className="mt-2 text-2xl font-semibold text-white">{telemetry.waterLevel}%</p>
+                <p className="mt-1 text-xs text-slate-300">{telemetry.waterLevelMm ?? 0} mm network max</p>
+              </div>
+              <div className="rounded-xl border border-slate-800 bg-slate-950/80 p-3">
+                <p className="text-xs uppercase tracking-[0.24em] text-slate-300">Priority Node</p>
+                <p className="mt-2 text-base font-semibold text-white">{priorityWaterNode?.name ?? 'Awaiting telemetry'}</p>
+                <p className="mt-1 text-xs text-slate-400">{priorityWaterNode?.zone ?? 'Network overview'}</p>
+              </div>
+              <div className="rounded-xl border border-slate-800 bg-slate-950/80 p-3">
+                <p className="text-xs uppercase tracking-[0.24em] text-slate-300">Refresh State</p>
+                <p className="mt-2 text-base font-semibold text-white">{connection.status === 'live' ? 'Streaming' : 'Standby'}</p>
+                <p className="mt-1 text-xs text-slate-400">Updated {telemetry.updatedAt.toLocaleTimeString()}</p>
+              </div>
+            </div>
 
-                    <button
-                      onClick={() => handleDispatch(alert.id)}
-                      className="rounded-lg border border-cyan-500/30 bg-cyan-500/10 px-3 py-2 text-sm font-medium text-cyan-100 transition hover:border-cyan-400/60 hover:bg-cyan-500/20"
-                    >
-                      <span className="flex items-center gap-2">
-                        <Send className="h-4 w-4" />
-                        {alert.status === 'Dispatched' ? 'Team En Route' : 'Dispatch Team'}
+            <div className="grid gap-4 lg:grid-cols-[1.1fr_0.9fr]">
+              <div className="rounded-xl border border-slate-800 bg-slate-950/80 p-3">
+                <div className="mb-2 flex items-center justify-between">
+                  <p className="text-sm font-medium text-white">Water depth by zone</p>
+                  <span className="text-xs text-slate-400">Live telemetry</span>
+                </div>
+                <div className="h-64">
+                  <ResponsiveContainer width="100%" height="100%" minWidth={200} minHeight={180}>
+                    <BarChart data={waterDepthChartData}>
+                      <CartesianGrid stroke="#1e293b" strokeDasharray="3 3" vertical={false} />
+                      <XAxis dataKey="zone" stroke="#94a3b8" fontSize={12} />
+                      <YAxis stroke="#94a3b8" fontSize={12} />
+                      <Tooltip
+                        contentStyle={{
+                          backgroundColor: '#0f172a',
+                          border: '1px solid rgba(34, 211, 238, 0.2)',
+                          borderRadius: '12px',
+                        }}
+                      />
+                      <Bar dataKey="depth" fill="#22d3ee" radius={[6, 6, 0, 0]} />
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+              </div>
+
+              <div className="space-y-3">
+                {liveWaterNodes.map((sensor) => (
+                  <article key={sensor.id} className="rounded-xl border border-slate-800 bg-slate-950/80 p-3">
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <p className="font-medium text-white">{sensor.name}</p>
+                        <p className="mt-1 text-xs text-slate-400">{sensor.zone} • {sensor.id}</p>
+                      </div>
+                      <span className="rounded-full border border-cyan-500/30 bg-cyan-500/10 px-2 py-0.5 text-xs text-cyan-100">
+                        {sensor.waterLevel ?? 0}%
                       </span>
-                    </button>
-                  </div>
-                </article>
-              ))}
-            </div>
-          </section>
-
-          <section className="rounded-2xl border border-emerald-500/20 bg-slate-900/70 p-4 backdrop-blur">
-            <div className="mb-4 flex items-center justify-between">
-              <div>
-                <p className="text-[11px] uppercase tracking-[0.32em] text-emerald-300">
-                  Actuator Controls
-                </p>
-                <h2 className="mt-1 text-lg font-semibold text-white">Drainage valves manual override</h2>
+                    </div>
+                    <div className="mt-3 h-2 overflow-hidden rounded-full bg-slate-800">
+                      <div
+                        className={`h-full rounded-full ${
+                          (sensor.waterLevel ?? 0) >= 75
+                            ? 'bg-rose-500'
+                            : (sensor.waterLevel ?? 0) >= 45
+                              ? 'bg-amber-400'
+                              : 'bg-cyan-400'
+                        }`}
+                        style={{ width: `${Math.min(100, Math.max(sensor.waterLevel ?? 0, 0))}%` }}
+                      />
+                    </div>
+                    <div className="mt-2 flex flex-wrap gap-3 text-xs text-slate-400">
+                      <span>{sensor.waterLevelCm ?? 0} cm</span>
+                      <span>{sensor.blockageDetected ? 'Inspection needed' : 'Normal flow'}</span>
+                    </div>
+                  </article>
+                ))}
               </div>
-              <Activity className="h-5 w-5 text-emerald-300" />
             </div>
+          </div>
 
-            <div className="space-y-3">
-              {valves.map((valve) => (
-                <article key={valve.id} className="rounded-xl border border-slate-800 bg-slate-950/80 p-4">
-                  <div className="flex items-start justify-between gap-3">
-                    <div>
-                      <div className="flex items-center gap-2">
-                        <p className="font-medium text-white">{valve.id}</p>
-                        <span
-                          className={`rounded-full px-2 py-0.5 text-[11px] ${
-                            valve.state === 'Open'
-                              ? 'border border-emerald-500/30 bg-emerald-500/10 text-emerald-200'
-                              : 'border border-rose-500/30 bg-rose-500/10 text-rose-200'
-                          }`}
+          <div className="grid gap-4">
+            <section className="rounded-2xl border border-amber-500/20 bg-slate-900/70 p-4 backdrop-blur">
+              <div className="mb-4 flex items-center justify-between">
+                <div>
+                  <p className="text-[11px] uppercase tracking-[0.32em] text-amber-300">
+                    Field Team Dispatch & Manual Cleaning Alerts
+                  </p>
+                  <h2 className="mt-1 text-lg font-semibold text-white">Manual cleaning queue</h2>
+                </div>
+                <MapPinned className="h-5 w-5 text-amber-300" />
+              </div>
+
+              <div className="space-y-3 max-h-96 overflow-y-auto">
+                <div className="space-y-3">
+                  {alerts.map((alert) => (
+                    <article key={alert.id} className="rounded-xl border border-slate-800 bg-slate-950/80 p-4">
+                      <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                        <div>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <p className="font-medium text-white">{alert.zone}</p>
+                            <span className="rounded-full border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 text-[11px] text-amber-200">
+                              {alert.severity}
+                            </span>
+                            <span className="rounded-full border border-slate-700 px-2 py-0.5 text-[11px] text-slate-300">
+                              {alert.id}
+                            </span>
+                          </div>
+                          <p className="mt-2 text-sm text-slate-300">{alert.issue}</p>
+                          <div className="mt-2 flex flex-wrap gap-4 text-xs text-slate-400">
+                            <span>GPS: {alert.coordinates}</span>
+                            <span>ETA: {alert.eta}</span>
+                            <span>Status: {alert.status}</span>
+                          </div>
+                        </div>
+
+                        <button
+                          onClick={() => handleDispatch(alert.id)}
+                          className="rounded-lg border border-cyan-500/30 bg-cyan-500/10 px-3 py-2 text-sm font-medium text-cyan-100 transition hover:border-cyan-400/60 hover:bg-cyan-500/20"
                         >
-                          {valve.state}
-                        </span>
+                          <span className="flex items-center gap-2">
+                            <Send className="h-4 w-4" />
+                            {alert.status === 'Dispatched' ? 'Team En Route' : 'Dispatch Team'}
+                          </span>
+                        </button>
                       </div>
-                      <p className="mt-1 text-sm text-slate-300">{valve.location}</p>
-                      <p className="mt-1 text-xs text-slate-400">Current flow: {valve.flow}</p>
+                    </article>
+                  ))}
+                </div>
+              </div>
+            </section>
+
+            <section className="rounded-2xl border border-emerald-500/20 bg-slate-900/70 p-4 backdrop-blur">
+              <div className="mb-4 flex items-center justify-between">
+                <div>
+                  <p className="text-[11px] uppercase tracking-[0.32em] text-emerald-300">
+                    Actuator Controls
+                  </p>
+                  <h2 className="mt-1 text-lg font-semibold text-white">Drainage valves manual override</h2>
+                </div>
+                <Activity className="h-5 w-5 text-emerald-300" />
+              </div>
+
+              <div className="space-y-3">
+                {valves.map((valve) => (
+                  <article key={valve.id} className="rounded-xl border border-slate-800 bg-slate-950/80 p-4">
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <p className="font-medium text-white">{valve.id}</p>
+                          <span
+                            className={`rounded-full px-2 py-0.5 text-[11px] ${
+                              valve.state === 'Open'
+                                ? 'border border-emerald-500/30 bg-emerald-500/10 text-emerald-200'
+                                : 'border border-rose-500/30 bg-rose-500/10 text-rose-200'
+                            }`}
+                          >
+                            {valve.state}
+                          </span>
+                        </div>
+                        <p className="mt-1 text-sm text-slate-300">{valve.location}</p>
+                        <p className="mt-1 text-xs text-slate-400">Current flow: {valve.flow}</p>
+                      </div>
+
+                      <button
+                        onClick={() => toggleValve(valve.id)}
+                        className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-sm font-medium text-emerald-100 transition hover:border-emerald-400/60 hover:bg-emerald-500/20"
+                      >
+                        <span className="flex items-center gap-2">
+                          <Wrench className="h-4 w-4" />
+                          {valve.state === 'Open' ? 'Close Valve' : 'Open Valve'}
+                        </span>
+                      </button>
                     </div>
+                  </article>
+                ))}
+              </div>
 
-                    <button
-                      onClick={() => toggleValve(valve.id)}
-                      className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-sm font-medium text-emerald-100 transition hover:border-emerald-400/60 hover:bg-emerald-500/20"
-                    >
-                      <span className="flex items-center gap-2">
-                        <Wrench className="h-4 w-4" />
-                        {valve.state === 'Open' ? 'Close Valve' : 'Open Valve'}
-                      </span>
-                    </button>
-                  </div>
-                </article>
-              ))}
-            </div>
-
-            <div className="mt-4 rounded-xl border border-emerald-500/20 bg-emerald-500/10 p-3 text-sm text-slate-200">
-              <p className="font-medium text-white">Operator control note</p>
-              <p className="mt-1 text-slate-300">
-                Commands are structured for PLC, WebSocket, or MQTT publishing once backend endpoints are connected.
-              </p>
-            </div>
-          </section>
+              <div className="mt-4 rounded-xl border border-emerald-500/20 bg-emerald-500/10 p-3 text-sm text-slate-200">
+                <p className="font-medium text-white">Operator control note</p>
+                <p className="mt-1 text-slate-300">
+                  Commands now publish live to the `aquasensor/command` MQTT topic when the backend bridge is connected.
+                </p>
+              </div>
+            </section>
+          </div>
         </section>
       </div>
     </div>
