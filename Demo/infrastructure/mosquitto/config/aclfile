@@ -1,0 +1,10 @@
+# Cloud bridge subscriber
+user drainage-cloud
+topic read city/drainage/#
+topic write city/drainage/+/status
+
+# Edge gateway publisher
+user drainage-edge
+topic write city/drainage/+/telemetry/#
+topic write city/drainage/+/alerts/#
+topic write city/drainage/+/status

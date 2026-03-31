@@ -1,0 +1,6 @@
+# Optional AI inference dependencies for full on-device model execution.
+# Install only on the target device or on a workstation with enough free disk space.
+# Linux/Raspberry Pi: prefer the lightweight TFLite runtime.
+tflite-runtime==2.14.0 ; platform_system == "Linux"
+# Windows/macOS fallback when a platform TFLite runtime wheel is unavailable.
+tensorflow==2.20.0 ; platform_system != "Linux"

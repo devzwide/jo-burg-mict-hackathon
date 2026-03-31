@@ -1,0 +1,35 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+node_modules
+dist
+dist-ssr
+*.local
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+edge/secrets.h
+backend/certs/
+infrastructure/mosquitto/certs/*
+!infrastructure/mosquitto/certs/.gitkeep
+infrastructure/mosquitto/config/passwordfile
+infrastructure/mosquitto/data/*
+!infrastructure/mosquitto/data/.gitkeep
+infrastructure/mosquitto/log/*
+!infrastructure/mosquitto/log/.gitkeep
+edge/data/*.jsonl
+edge/models/*.tflite

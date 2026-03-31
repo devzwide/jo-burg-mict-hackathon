@@ -1,0 +1,19 @@
+services:
+  mosquitto:
+    image: eclipse-mosquitto:2.0
+    container_name: smart-drainage-mosquitto
+    restart: unless-stopped
+    ports:
+      - "8883:8883"
+    volumes:
+      - ./infrastructure/mosquitto/config/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+      - ./infrastructure/mosquitto/config/aclfile:/mosquitto/config/aclfile:ro
+      - ./infrastructure/mosquitto/config/passwordfile:/mosquitto/config/passwordfile
+      - ./infrastructure/mosquitto/certs:/mosquitto/certs:ro
+      - ./infrastructure/mosquitto/data:/mosquitto/data
+      - ./infrastructure/mosquitto/log:/mosquitto/log
+    healthcheck:
+      test: ["CMD-SHELL", "test -f /mosquitto/config/passwordfile -a -f /mosquitto/certs/server.crt -a -f /mosquitto/certs/server.key"]
+      interval: 15s
+      timeout: 5s
+      retries: 5

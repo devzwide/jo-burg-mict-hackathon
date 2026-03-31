@@ -1,0 +1,7 @@
+plastic
+leaves
+sediment
+paper
+bottle
+bag
+trash

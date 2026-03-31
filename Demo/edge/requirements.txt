@@ -1,0 +1,6 @@
+paho-mqtt==2.1.0
+python-dotenv==1.1.1
+# Lean base runtime dependencies for water-level monitoring, MQTT, and OpenCV preprocessing.
+numpy==2.1.3
+opencv-python-headless==4.12.0.88
+# Install `edge/requirements-ai-optional.txt` only when you need full TFLite/TensorFlow inference.
