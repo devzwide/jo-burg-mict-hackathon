@@ -22,7 +22,6 @@ import {
   Bar,
   BarChart,
   CartesianGrid,
-  ResponsiveContainer,
   Tooltip,
   XAxis,
   YAxis,
@@ -40,7 +39,7 @@ const riskTrend = [
   { time: '18:00', probability: 63 },
 ]
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL?.trim() || 'http://127.0.0.1:8000'
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL?.trim() || ''
 
 const twinNodePositions = [
   'top-[18%] left-[16%]',
@@ -306,7 +305,7 @@ function App() {
             </div>
           </div>
 
-          <aside className="space-y-4">
+          <aside className="min-w-0 space-y-4">
             <section className="rounded-2xl border border-violet-500/20 bg-slate-900/70 p-4 backdrop-blur">
               <div className="mb-3 flex items-center justify-between">
                 <div>
@@ -328,34 +327,36 @@ function App() {
                 </div>
               </div>
 
-              <div className="h-56">
-                <ResponsiveContainer width="100%" height="100%" minWidth={200} minHeight={200}>
-                  <AreaChart data={liveRiskTrend}>
-                    <defs>
-                      <linearGradient id="riskFill" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="5%" stopColor="#22d3ee" stopOpacity={0.45} />
-                        <stop offset="95%" stopColor="#22d3ee" stopOpacity={0.05} />
-                      </linearGradient>
-                    </defs>
-                    <CartesianGrid stroke="#1e293b" strokeDasharray="3 3" />
-                    <XAxis dataKey="time" stroke="#94a3b8" fontSize={12} />
-                    <YAxis domain={[0, 100]} stroke="#94a3b8" fontSize={12} />
-                    <Tooltip
-                      contentStyle={{
-                        backgroundColor: '#0f172a',
-                        border: '1px solid rgba(34, 211, 238, 0.2)',
-                        borderRadius: '12px',
-                      }}
-                    />
-                    <Area
-                      type="monotone"
-                      dataKey="probability"
-                      stroke="#22d3ee"
-                      strokeWidth={2}
-                      fill="url(#riskFill)"
-                    />
-                  </AreaChart>
-                </ResponsiveContainer>
+              <div className="h-56 min-w-0">
+                <AreaChart
+                  responsive
+                  data={liveRiskTrend}
+                  style={{ width: '100%', height: '100%', minWidth: 200, minHeight: 200 }}
+                >
+                  <defs>
+                    <linearGradient id="riskFill" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor="#22d3ee" stopOpacity={0.45} />
+                      <stop offset="95%" stopColor="#22d3ee" stopOpacity={0.05} />
+                    </linearGradient>
+                  </defs>
+                  <CartesianGrid stroke="#1e293b" strokeDasharray="3 3" />
+                  <XAxis dataKey="time" stroke="#94a3b8" fontSize={12} />
+                  <YAxis domain={[0, 100]} stroke="#94a3b8" fontSize={12} />
+                  <Tooltip
+                    contentStyle={{
+                      backgroundColor: '#0f172a',
+                      border: '1px solid rgba(34, 211, 238, 0.2)',
+                      borderRadius: '12px',
+                    }}
+                  />
+                  <Area
+                    type="monotone"
+                    dataKey="probability"
+                    stroke="#22d3ee"
+                    strokeWidth={2}
+                    fill="url(#riskFill)"
+                  />
+                </AreaChart>
               </div>
 
               <ul className="mt-4 space-y-2 text-sm text-slate-300">
@@ -381,22 +382,24 @@ function App() {
                 <Waves className="h-5 w-5 text-cyan-300" />
               </div>
 
-              <div className="h-48">
-                <ResponsiveContainer width="100%" height="100%" minWidth={200} minHeight={150}>
-                  <BarChart data={waterDepthChartData}>
-                    <CartesianGrid stroke="#1e293b" strokeDasharray="3 3" vertical={false} />
-                    <XAxis dataKey="zone" stroke="#94a3b8" fontSize={12} />
-                    <YAxis stroke="#94a3b8" fontSize={12} />
-                    <Tooltip
-                      contentStyle={{
-                        backgroundColor: '#0f172a',
-                        border: '1px solid rgba(34, 211, 238, 0.2)',
-                        borderRadius: '12px',
-                      }}
-                    />
-                    <Bar dataKey="depth" fill="#38bdf8" radius={[6, 6, 0, 0]} />
-                  </BarChart>
-                </ResponsiveContainer>
+              <div className="h-48 min-w-0">
+                <BarChart
+                  responsive
+                  data={waterDepthChartData}
+                  style={{ width: '100%', height: '100%', minWidth: 200, minHeight: 150 }}
+                >
+                  <CartesianGrid stroke="#1e293b" strokeDasharray="3 3" vertical={false} />
+                  <XAxis dataKey="zone" stroke="#94a3b8" fontSize={12} />
+                  <YAxis stroke="#94a3b8" fontSize={12} />
+                  <Tooltip
+                    contentStyle={{
+                      backgroundColor: '#0f172a',
+                      border: '1px solid rgba(34, 211, 238, 0.2)',
+                      borderRadius: '12px',
+                    }}
+                  />
+                  <Bar dataKey="depth" fill="#38bdf8" radius={[6, 6, 0, 0]} />
+                </BarChart>
               </div>
             </section>
           </aside>
@@ -438,22 +441,24 @@ function App() {
                   <p className="text-sm font-medium text-white">Water depth by zone</p>
                   <span className="text-xs text-slate-400">Live telemetry</span>
                 </div>
-                <div className="h-64">
-                  <ResponsiveContainer width="100%" height="100%" minWidth={200} minHeight={180}>
-                    <BarChart data={waterDepthChartData}>
-                      <CartesianGrid stroke="#1e293b" strokeDasharray="3 3" vertical={false} />
-                      <XAxis dataKey="zone" stroke="#94a3b8" fontSize={12} />
-                      <YAxis stroke="#94a3b8" fontSize={12} />
-                      <Tooltip
-                        contentStyle={{
-                          backgroundColor: '#0f172a',
-                          border: '1px solid rgba(34, 211, 238, 0.2)',
-                          borderRadius: '12px',
-                        }}
-                      />
-                      <Bar dataKey="depth" fill="#22d3ee" radius={[6, 6, 0, 0]} />
-                    </BarChart>
-                  </ResponsiveContainer>
+                <div className="h-64 min-w-0">
+                  <BarChart
+                    responsive
+                    data={waterDepthChartData}
+                    style={{ width: '100%', height: '100%', minWidth: 200, minHeight: 180 }}
+                  >
+                    <CartesianGrid stroke="#1e293b" strokeDasharray="3 3" vertical={false} />
+                    <XAxis dataKey="zone" stroke="#94a3b8" fontSize={12} />
+                    <YAxis stroke="#94a3b8" fontSize={12} />
+                    <Tooltip
+                      contentStyle={{
+                        backgroundColor: '#0f172a',
+                        border: '1px solid rgba(34, 211, 238, 0.2)',
+                        borderRadius: '12px',
+                      }}
+                    />
+                    <Bar dataKey="depth" fill="#22d3ee" radius={[6, 6, 0, 0]} />
+                  </BarChart>
                 </div>
               </div>
 

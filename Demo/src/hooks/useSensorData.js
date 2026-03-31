@@ -13,7 +13,31 @@ const SENSOR_ALIAS_MAP = {
 }
 
 const GPS_ORIGIN = { lat: 25.2814, lon: 51.5292 }
-const WS_URL = import.meta.env.VITE_TELEMETRY_WS_URL ?? 'ws://127.0.0.1:8000/ws/telemetry'
+const DEFAULT_WS_PATH = '/ws/telemetry'
+const DEFAULT_HEALTH_PATH = '/health'
+
+const resolveRealtimeUrl = (configuredValue, fallbackPath, { websocket = false } = {}) => {
+  const configured = configuredValue?.trim()
+  if (configured) {
+    return configured
+  }
+
+  if (typeof window === 'undefined') {
+    return websocket ? `ws://127.0.0.1:8000${fallbackPath}` : `http://127.0.0.1:8000${fallbackPath}`
+  }
+
+  if (websocket) {
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+    return `${protocol}//${window.location.host}${fallbackPath}`
+  }
+
+  return `${window.location.origin}${fallbackPath}`
+}
+
+const WS_URL = resolveRealtimeUrl(import.meta.env.VITE_TELEMETRY_WS_URL, DEFAULT_WS_PATH, {
+  websocket: true,
+})
+const HEALTH_URL = resolveRealtimeUrl(import.meta.env.VITE_TELEMETRY_HEALTH_URL, DEFAULT_HEALTH_PATH)
 const MAX_WATER_LEVEL_CM = Number(import.meta.env.VITE_WATER_LEVEL_MAX_CM ?? 120)
 
 const clamp = (value, min, max) => Math.min(max, Math.max(min, value))
@@ -297,19 +321,58 @@ export function useSensorData() {
       })
     }
 
-    const connectWebSocket = () => {
+    const scheduleReconnect = (status = reconnectAttempts > 0 ? 'reconnecting' : 'waiting') => {
+      if (!shouldReconnect) {
+        return
+      }
+
+      markBridgeUnavailable(status)
+      const delay = Math.min(30000, 1000 * 2 ** reconnectAttempts)
+      reconnectAttempts += 1
+      reconnectTimer = window.setTimeout(() => {
+        void connectWebSocket()
+      }, delay)
+    }
+
+    const probeBridgeAvailability = async () => {
+      try {
+        const response = await window.fetch(HEALTH_URL, { cache: 'no-store' })
+        return response.ok
+      } catch {
+        return false
+      }
+    }
+
+    const connectWebSocket = async () => {
+      if (!shouldReconnect) {
+        return
+      }
+
       setConnection({ mode: 'websocket', status: 'connecting', endpoint: WS_URL })
+
+      const bridgeAvailable = await probeBridgeAvailability()
+      if (!shouldReconnect) {
+        return
+      }
+
+      if (!bridgeAvailable) {
+        scheduleReconnect(reconnectAttempts > 0 ? 'reconnecting' : 'waiting')
+        return
+      }
 
       try {
         socket = new window.WebSocket(WS_URL)
       } catch {
-        markBridgeUnavailable('error')
-        reconnectTimer = window.setTimeout(connectWebSocket, Math.min(30000, 1000 * 2 ** reconnectAttempts))
-        reconnectAttempts += 1
+        scheduleReconnect('error')
         return
       }
 
       socket.onopen = () => {
+        if (!shouldReconnect) {
+          socket?.close(1000, 'disposed')
+          return
+        }
+
         reconnectAttempts = 0
         setConnection({ mode: 'websocket', status: 'live', endpoint: WS_URL })
       }
@@ -329,7 +392,7 @@ export function useSensorData() {
       }
 
       socket.onerror = () => {
-        socket.close()
+        markBridgeUnavailable('error')
       }
 
       socket.onclose = () => {
@@ -337,15 +400,13 @@ export function useSensorData() {
           return
         }
 
-        reconnectAttempts += 1
-        markBridgeUnavailable(reconnectAttempts > 1 ? 'reconnecting' : 'waiting')
-        reconnectTimer = window.setTimeout(connectWebSocket, Math.min(30000, 1000 * 2 ** (reconnectAttempts - 1)))
+        scheduleReconnect(reconnectAttempts > 0 ? 'reconnecting' : 'waiting')
       }
     }
 
     const connectSupabase = async () => {
       if (!isSupabaseConfigured || !supabase) {
-        connectWebSocket()
+        void connectWebSocket()
         return
       }
 
@@ -396,7 +457,7 @@ export function useSensorData() {
             status: 'error',
             endpoint: error?.message ?? 'Supabase query failed',
           })
-          connectWebSocket()
+          void connectWebSocket()
         }
       }
 
@@ -440,8 +501,15 @@ export function useSensorData() {
         supabase.removeChannel(realtimeChannel)
       }
 
-      if (socket && socket.readyState <= 1) {
-        socket.close()
+      if (socket) {
+        socket.onopen = null
+        socket.onmessage = null
+        socket.onerror = null
+        socket.onclose = null
+      }
+
+      if (socket && socket.readyState === window.WebSocket.OPEN) {
+        socket.close(1000, 'component unmounted')
       }
     }
   }, [])

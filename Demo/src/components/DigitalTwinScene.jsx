@@ -41,11 +41,13 @@ function DrainageAssembly({ waterLevel, blocked }) {
   const waterRef = useRef(null)
 
   useFrame(({ clock }) => {
+    const elapsed = clock.getElapsedTime()
+
     if (alertSegmentRef.current) {
-      const pulse = blocked ? 1 + Math.sin(clock.elapsedTime * 5) * 0.05 : 1
+      const pulse = blocked ? 1 + Math.sin(elapsed * 5) * 0.05 : 1
       alertSegmentRef.current.scale.set(pulse, pulse, pulse)
       alertSegmentRef.current.material.emissiveIntensity = blocked
-        ? 0.8 + (Math.sin(clock.elapsedTime * 5) + 1) * 0.2
+        ? 0.8 + (Math.sin(elapsed * 5) + 1) * 0.2
         : 0.12
     }
 
